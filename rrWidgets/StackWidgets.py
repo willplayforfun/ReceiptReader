@@ -4,10 +4,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 
 from rrWidgets.PhotoViewer import PhotoViewer
-
-from rrUtilities.ImageCleaner import MorphologicalOperationType as Morph
-from rrUtilities.ImageCleaner import *
-
+# OpStack
+from rrUtilities.ImageOperations import *
 # getting cv2_to_pixmap helper
 from rrUtilities.TypeHelpers import *
 

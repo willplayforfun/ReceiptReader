@@ -3,57 +3,18 @@ from PyQt5.QtCore import pyqtSignal as Signal
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 
-from rrUtilities.ImageCleaner import *
-from rrUtilities.TextReader import *
-from rrUtilities.DataVisualizer import *
+# TesseractThreadManager and TesseractDataVisualizer
+from rrUtilities.TesseractWrapper import *
+# getting cv2_to_pixmap helper
+from rrUtilities.TypeHelpers import *
+# ImageResizer
+from rrUtilities.ImageResizer import *
 
 from rrWidgets.PhotoViewer import PhotoViewer
 
-# getting cv2_to_pixmap helper
-from rrUtilities.TypeHelpers import *
-
-import logging
-import threading
-import time
 
 
 MAX_WIDTH = 400
-
-# handles async calls to Tesseract on a separate thread to prevent stalls
-class TesseractThreadManager:
-	def __init__(self, tesseract_path):
-		self.tesseract_path = tesseract_path
-		self.cached_results = None
-		
-	def tesseract_thread_func(self, name):
-		print("Thread {0}: starting".format(name))
-		
-		self.text_reader = TextReader(self.tesseract_path)
-		
-		time.sleep(2)
-		
-		self.cached_results = self.text_reader.read_image(self.cached_image)
-		
-		print("Thread {0}: finishing".format(name))
-		
-	def start_thread(self):
-	
-		# daemon means it will auto-shutdown
-		self.thread = threading.Thread(target=self.tesseract_thread_func, args=(1,), daemon=True)
-		self.thread.start()
-
-	def start_read_image(self, image, callback):
-		self.cached_image = image
-		
-		# send up semaphore
-		
-		
-		
-		callback()
-		
-	def get_cached_results(self):
-		return self.cached_results
-
 
 # this widget shows the result of an OCR operation on the open test image by the open stack
 # it has an option to auto-refresh after a change, as well a manual refresh button
@@ -61,7 +22,7 @@ class TesseractPreviewWidget(QDockWidget):
 	def __init__(self, parent = None, floating = False):
 		super(TesseractPreviewWidget, self).__init__("Tesseract Preview", parent)
 		self.setFloating(floating)
-		self.setFeatures(self.DockWidgetMovable)
+		self.setFeatures(self.DockWidgetFloatable)
 		self.setMinimumSize(QSize(200, 600))
 		
 		self.layout = QVBoxLayout()
@@ -93,14 +54,20 @@ class TesseractPreviewWidget(QDockWidget):
 		self.controls_layout.addWidget(self.spinner_label)
 		self.spinner_label.setVisible(False)
 		
+		# auto-update checkbox
+		self.auto_update_checkbox = QCheckBox("Auto-update:")
+		self.auto_update_checkbox.toggled.connect(self.auto_update_toggled)
+		self.auto_update_checkbox.setLayoutDirection(Qt.RightToLeft)
+		self.controls_layout.addWidget(self.auto_update_checkbox)
+		
+		
 		# TODO add error label that appear if a tesseract operation fails
-		# TODO add an auto-update checkbox
 		
 	def setup(self, tesseract_path):
-		self.data_vis = DataVisualizer()
+		self.data_vis = TesseractDataVisualizer()
 		
 		self.thread_manager = TesseractThreadManager(tesseract_path)
-		self.thread_manager.start_thread()
+		self.thread_manager.onOperationComplete.connect(self.processing_finished)
 		
 	def update_from_results(self, results):
 	
@@ -113,6 +80,13 @@ class TesseractPreviewWidget(QDockWidget):
 		aspect_ratio = self.latest_image.shape[1] / self.latest_image.shape[0]
 		self.resize(QSize(new_width, aspect_ratio * new_width))
 		
+		if self.auto_update_checkbox.isChecked():
+			self.process_latest(True)
+		
+	def auto_update_toggled(self, event):
+		if self.auto_update_checkbox.isChecked():
+			self.process_latest(True)
+		
 	def clear(self):
 		self.latest_image = None
 		
@@ -122,7 +96,7 @@ class TesseractPreviewWidget(QDockWidget):
 			self.update_button.setEnabled(False)
 			self.spinner_label.setVisible(True)
 		
-			self.thread_manager.start_read_image(self.latest_image, self.processing_finished)
+			self.thread_manager.start_read_image(self.latest_image)
 			
 		else:
 			print("Latest processed image is None!")

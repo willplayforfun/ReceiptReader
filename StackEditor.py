@@ -1,23 +1,27 @@
+#!venv/Scripts/python
+
 from PyQt5.QtCore import *
 from PyQt5.QtCore import pyqtSignal as Signal
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 
-from rrUtilities.ImageCleaner import MorphologicalOperationType as Morph
-from rrUtilities.ImageCleaner import *
-
+# Operation Stack
+from rrUtilities.ImageOperations import *
+# DirWatcher for watching dataset directories for changes
+from rrUtilities.DirWatcher import DirWatcher
 # getting is_valid_file for argparse
 from rrUtilities.TypeHelpers import *
 
 from rrWidgets.StackWidgets import *
 from rrWidgets.TesseractPreviewerWidget import *
 
+
 import argparse
 import os
 import io
 import yaml
 from queue import Queue
-from rrUtilities.DirWatcher import DirWatcher
+
 
 # This program lets a user design a sequence of Computer Vision Operations, or "OpStack",
 # that processes a raw image into a machine-readable result.
@@ -39,12 +43,12 @@ from rrUtilities.DirWatcher import DirWatcher
 # TODO: 
 # 	show open filename in window bar
 # 	allow customizing of operation labels
-# 	multi-thread tesseract
-# 	grey out tesseract update button until the stack changes
+# 	[DONE] multi-thread tesseract
+# 	[DONE] grey out tesseract update button until the stack changes
 # 	toggle overlay of actual image in tesseract preview
 # 	allow slaving all the image viewing areas to the same scroll amount
-# 	fix scrolling out on image viewers
-# 	add a check box to auto-update tesseract preview
+# 	fix scrolling out on image viewers 
+# 	[DONE] add a check box to auto-update tesseract preview
 # 	add stack saving / opening
 # 	add boundaries and warping operations
 # 	add undo/redo stack
@@ -57,7 +61,10 @@ DEFAULT_DATASET_VIEWER_X = -300 #200
 DEFAULT_MAIN_WINDOW_X = 0 #500
 DEFAULT_TESSERACT_PREVIEW_X = -800 #1800
 
-TESSERACT_PATH = r'C:\Program Files (x86)\Tesseract-OCR\tesseract'
+TESSERACT_PATH = r'resources\Tesseract-OCR\tesseract'
+
+DIR_BLACKLIST = ["venv", ".git", "__pycache__", "Tesseract-OCR", "rrUtilities", "rrWidgets"]
+VALID_IMG_EXTS = [".png", ".jpg"]
 
 # this widget shows all the images in the dataset, 
 # and lets you select one as an example to play with
@@ -68,7 +75,7 @@ class DatasetViewerWidget(QDockWidget):
 	def __init__(self, parent = None, floating = False):
 		super(DatasetViewerWidget, self).__init__("Dataset Viewer", parent)
 		self.setFloating(floating)
-		self.setFeatures(self.DockWidgetMovable)
+		self.setFeatures(self.DockWidgetFloatable)
 		self.setMinimumSize(QSize(200, 600))
 		
 		self.dir_change_queue = Queue()
@@ -89,9 +96,6 @@ class DatasetViewerWidget(QDockWidget):
 		self.listbox.clicked.connect(self.clicked)
 		self.listbox.doubleClicked.connect(self.doubleClicked)
 		self.layout.addWidget(self.listbox)
-
-		self.DIR_BLACKLIST = ["venv", "__pycache__", "Tesseract-OCR", "rrUtilities", "rrWidgets"]
-		self.VALID_IMG_EXTS = [".png", ".jpg"]
 		
 	def setup(self):
 		start_dir = os.getcwd()
@@ -102,7 +106,7 @@ class DatasetViewerWidget(QDockWidget):
 		for root, dirs, files in os.walk(start_dir):
 			# ignore blacklisted dirs
 			ignore_dir = False
-			for black_dir in self.DIR_BLACKLIST: 
+			for black_dir in DIR_BLACKLIST: 
 				if black_dir in root:
 					#print("IGNORING " + root)
 					ignore_dir = True
@@ -115,7 +119,7 @@ class DatasetViewerWidget(QDockWidget):
 			
 			# we also want to initialize our starting list of files
 			for file in files:
-				if os.path.splitext(file)[1].lower() in self.VALID_IMG_EXTS:
+				if os.path.splitext(file)[1].lower() in VALID_IMG_EXTS:
 					self.file_list.append([file, os.path.join(root,file)])
 		
 		# now we setup the watchers on those dirs
@@ -152,16 +156,16 @@ class DatasetViewerWidget(QDockWidget):
 			file_type, filename, action = self.dir_change_queue.get() #get_nowait()
 			
 			#ignore updates to non-image files
-			if os.path.splitext(filename)[1].lower() not in self.VALID_IMG_EXTS: return
+			if os.path.splitext(filename)[1].lower() not in VALID_IMG_EXTS: return
 			
 			print("{}, {}, {}".format(file_type, filename, action))
 			
-			if action in ["Created", "Renamed from something"]:
+			if action in [WIN32_ACTION_CREATED, WIN32_ACTION_RENAMED_FROM]:
 				print(action)
 				self.file_list.append([os.path.basename(filename), filename])
 				self.updateListWidget()
 			
-			if action in ["Deleted", "Renamed to something"]:
+			if action in [WIN32_ACTION_DELETED, WIN32_ACTION_RENAMED_TO]:
 				print(action)
 				for index in range(len(self.file_list)):
 					if self.file_list[index][1] == filename:
@@ -569,10 +573,10 @@ if __name__=="__main__":
 
 	parser = argparse.ArgumentParser()
 	#parser.add_argument("--verbose", help="increase output verbosity", action="store_true")
-	parser.add_argument("starting_image", default="default.png",
-									help="starting image file", metavar="FILE",
-									type=lambda x: is_valid_file(parser, x))
-	parser.add_argument("-c", dest="config_textio", default="config.yaml",
+	parser.add_argument("-i", dest="starting_image",
+								help="starting image file", metavar="FILE",
+								type=lambda x: is_valid_file(parser, x))
+	parser.add_argument("-c", dest="config_textio", default="resources/config.yaml",
 								help="YAML config file", metavar="FILE",
 								type=lambda x: is_valid_file(parser, x))
 	args = parser.parse_args()
@@ -598,11 +602,13 @@ if __name__=="__main__":
 	stack = OperationStack()
 	stack.add_operation(ThresholdOperation().set_otsu_threshold(cv2.THRESH_BINARY))
 	stack.add_operation(BitwiseNotOperation())
-	stack.add_operation(MorphologicalOperation(Morph.DILATION, kernelSize = 3))
+	stack.add_operation(MorphologicalOperation(MorphologicalOperationType.DILATION, kernelSize = 3))
 	
 	# load an initial image
-	print("Opening starter image: {0}".format(args.starting_image.name))
-	img = cv2.imread(str(args.starting_image.name),cv2.IMREAD_COLOR)
+	img = None
+	if args.starting_image:
+		print("Opening starter image: {0}".format(args.starting_image.name))
+		img = cv2.imread(str(args.starting_image.name),cv2.IMREAD_COLOR)
 	
 	# start the program
 	start_stack_editor(img, stack)

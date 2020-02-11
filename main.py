@@ -10,26 +10,30 @@ import cv2
 import numpy as np
 # --------------
 
-from rrUtilities.ImageCleaner import MorphologicalOperationType as Morph
-from rrUtilities.ImageCleaner import *
-from rrUtilities.TextReader import *
-from rrUtilities.DataVisualizer import *
+from rrUtilities.ImageOperations import MorphologicalOperationType as Morph
+from rrUtilities.ImageOperations import *
+
+# TesseractThreadManager and TesseractDataVisualizer
+from rrUtilities.TesseractWrapper import *
+# ImageResizer
+from rrUtilities.ImageResizer import *
 
 # getting is_valid_file for argparse
 from rrUtilities.TypeHelpers import *
+
 
 print("Using Python version: " + sys.version)
 print("Current working directory: " + os.getcwd())
 
 DEBUG = True
-config_textio = io.TextIOWrapper(open("config.yaml", 'r'), encoding='utf8', newline='\n')
-tesseract_path = r'C:\Program Files (x86)\Tesseract-OCR\tesseract'
+config_textio = io.TextIOWrapper(open("resources/config.yaml", 'r'), encoding='utf8', newline='\n')
+tesseract_path = r'resources\Tesseract-OCR\tesseract'
 dataset_path = "dataset"
 
 
 parser = argparse.ArgumentParser()
 #parser.add_argument("--verbose", help="increase output verbosity", action="store_true")
-parser.add_argument("-c", dest="config_textio", default="config.yaml",
+parser.add_argument("-c", dest="config_textio", default="resources/config.yaml",
 								help="YAML config file", metavar="FILE",
 								type=lambda x: is_valid_file(parser, x))
 args = parser.parse_args()
@@ -51,7 +55,7 @@ if 'dataset_path' in config:
 	dataset_path = config['dataset_path']
 #------------------------------
 
-text_reader = TextReader(tesseract_path)
+text_reader = TesseractWrapper(tesseract_path)
 
 # Load Dataset ----
 dataset = []
@@ -134,7 +138,7 @@ for file in dataset:
 	boxes = text_reader.read_image(cleaned_img)
 	
 	# Draw the bounding box
-	data_vis = DataVisualizer()
+	data_vis = TesseractDataVisualizer()
 	bounds_img = data_vis.draw_text_bounds(boxes, cleaned_img)
 	
 	#resize
