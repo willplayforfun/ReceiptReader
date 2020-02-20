@@ -20,6 +20,7 @@ import argparse
 import os
 import io
 import yaml
+import json
 from queue import Queue
 
 
@@ -339,6 +340,17 @@ class StackEditor(QMainWindow):
 	onOperationMovedDown = Signal(int)
 	onOperationAdded = Signal()
 	onOperationMuted = Signal(int)
+	
+	def appendStrToTitle(self, message):
+		self.setWindowTitle("CV Operation Stack Editor - {0}".format(message))
+	
+	def closeEvent(self, event):
+		success = self.askToSave()
+		if success:
+			event.accept()
+		else:
+			event.ignore()
+			
 
 	def __init__(self, parent = None, qtApp = None):
 		super(StackEditor, self).__init__(parent)
@@ -349,7 +361,9 @@ class StackEditor(QMainWindow):
 		self.loadedStack = None
 		self.currentImage = None
 		self.currentOpIndex = 0
-		
+		self.stackDirty = False
+		self.currentFilepath = None
+		self.updateFilenameInTitle()
 		
 		self.op_types = [
 			MorphologicalOperation,
@@ -359,7 +373,7 @@ class StackEditor(QMainWindow):
 		]
 		
 		#UI
-		self.setWindowTitle("CV Operation Stack Editor")
+		#self.setWindowTitle("CV Operation Stack Editor")
 		self.setup_menubar()
 		self.resize(1200, 800)
 		
@@ -410,6 +424,9 @@ class StackEditor(QMainWindow):
 		self.move(DEFAULT_MAIN_WINDOW_X, DEFAULT_APPLICATION_Y)
 		self.tesseractPreviewWidget.move(DEFAULT_TESSERACT_PREVIEW_X, DEFAULT_APPLICATION_Y)
 
+
+	# ---------------------- MODIFYING OPERATION STACK -------------------------
+
 	def operationSelected(self, index):
 		#print("operationSelected {}".format(index))
 		self.currentOpIndex = index
@@ -425,6 +442,7 @@ class StackEditor(QMainWindow):
 		box.setDefaultButton(QMessageBox.Yes)
 		if(box.exec_() == QMessageBox.Yes):
 			self.loadedStack.remove_op(index)
+			self.setStackDirty(True)
 			if self.currentOpIndex >= len(self.loadedStack.get_stack()):
 				self.currentOpIndex -= 1
 			self.refresh()
@@ -433,6 +451,7 @@ class StackEditor(QMainWindow):
 		#print("operationMovedUp {}".format(index))
 		if index > 0 and len(self.loadedStack.get_stack()) > 1:
 			self.loadedStack.swap_ops(index, index - 1)
+			self.setStackDirty(True)
 			
 			if self.currentOpIndex == index - 1: self.currentOpIndex += 1
 			elif self.currentOpIndex == index: self.currentOpIndex -= 1
@@ -443,6 +462,7 @@ class StackEditor(QMainWindow):
 		#print("operationMovedDown {}".format(index))
 		if index < len(self.loadedStack.get_stack()) and len(self.loadedStack.get_stack()) > 1:
 			self.loadedStack.swap_ops(index, index + 1)
+			self.setStackDirty(True)
 			
 			if self.currentOpIndex == index + 1: self.currentOpIndex -= 1
 			elif self.currentOpIndex == index: self.currentOpIndex += 1
@@ -456,69 +476,25 @@ class StackEditor(QMainWindow):
 		if(box.exec_() == QDialog.Accepted):
 			op = self.op_types[box.get_choice_index()]()
 			self.loadedStack.add_operation(op)
+			self.setStackDirty(True)
 			self.currentOpIndex = len(self.loadedStack.get_stack()) - 1
 			self.refresh()
 		
 	def operationMuted(self, index):
 		#print("operationMuted {}".format(index))
 		self.loadedStack.get_stack()[index].muted = not self.loadedStack.get_stack()[index].muted
+		self.setStackDirty(True)
 		self.refresh()
 
-	def fileSelected(self, file_path):
-		print("fileSelected {}".format(file_path))
-		img = cv2.imread(file_path,cv2.IMREAD_COLOR)
-		if img is not None:
-			self.datasetViewerWidget.onFileOpened(file_path)
-			self.use_image(img)
-		else:
-			print("Image read failed!")
-			
 
-	def setup_menubar(self):
-		bar = self.menuBar()
-		file = bar.addMenu("File")
-		newAction = file.addAction("New")
-		saveAction = file.addAction("Save")
-		saveAsAction = file.addAction("Save As")
-		openAction = file.addAction("Open")
-		quitAction = file.addAction("Quit")
-		
-		# key shortcuts
-		newAction.setShortcut(QKeySequence(QKeySequence.New))
-		saveAction.setShortcut(QKeySequence(QKeySequence.Save))
-		saveAsAction.setShortcut(QKeySequence(QKeySequence.SaveAs))
-		openAction.setShortcut(QKeySequence(QKeySequence.Open))
-		quitAction.setShortcut(QKeySequence(QKeySequence.Quit))
-		
-		# actual function calls
-		newAction.triggered.connect(self.MenuAction_New)
-		saveAction.triggered.connect(self.MenuAction_Save)
-		saveAsAction.triggered.connect(self.MenuAction_SaveAs)
-		openAction.triggered.connect(self.MenuAction_Open)
-		quitAction.triggered.connect(self.MenuAction_Quit)
-		
-	def MenuAction_New(self, checked):
-		pass
-	def MenuAction_Save(self, checked):
-		pass
-	def MenuAction_SaveAs(self, checked):
-		pass
-	def MenuAction_Open(self, checked):
-		pass
-	def MenuAction_Quit(self, checked):
-		if self.qtApp:
-			self.qtApp.quit()
-		
-	def edit_stack(self, stack):
+	def use_stack(self, stack):
 		self.loadedStack = stack
 		self.currentOpIndex = 0
 		self.refresh()
 
-	def use_image(self, img):
-		self.currentImage = img
-		self.refresh()
-		
-	
+
+	# ------------------ UPDATING PREVIEW IMAGES / STACK PROPERTIES ----------------------
+
 	def refresh_image_only(self):
 		if self.loadedStack is not None and self.currentImage is not None:
 			processer = ImageProcesser(self.loadedStack)
@@ -553,18 +529,232 @@ class StackEditor(QMainWindow):
 			self.operationSelected(self.currentOpIndex)
 
 
-def start_stack_editor(img, stack):
-	app = QApplication([])
-	
-	editor = StackEditor(None, app)
-	editor.show()
-	
-	# load the initial image and opstack
-	editor.use_image(img)
-	editor.edit_stack(stack)
-	
-	app.exec_()
 
+	# ---------------------- HANDLE EXAMPLE IMAGE LOADING -------------------------
+
+
+	def use_image(self, img):
+		self.currentImage = img
+		self.refresh()
+		
+
+	def fileSelected(self, file_path):
+		print("fileSelected {}".format(file_path))
+		img = cv2.imread(file_path,cv2.IMREAD_COLOR)
+		if img is not None:
+			self.datasetViewerWidget.onFileOpened(file_path)
+			self.use_image(img)
+		else:
+			print("Image read failed!")
+			
+
+	# ---------------------- STACK FILE LOADING/SAVING -------------------------
+
+	def showError(self, errorStr, details = ""):
+		msg = QMessageBox()
+		msg.setIcon(QMessageBox.Critical)
+		msg.setText(errorStr)
+		msg.setInformativeText(details)
+		msg.setWindowTitle("Error")
+		msg.exec_()
+
+	def updateFilenameInTitle(self):
+		fileStr = "New file"
+		if self.currentFilepath and self.currentFilepath != "":
+			fileStr = self.currentFilepath
+		self.appendStrToTitle("{0}{1}".format(fileStr, "*" if self.stackDirty else ""))
+
+	def setStackDirty(self, isDirty):
+		self.stackDirty = isDirty
+		self.updateFilenameInTitle()
+
+	def set_current_filepath(self, filepath):
+		self.currentFilepath = filepath
+		self.updateFilenameInTitle()
+
+	def setup_menubar(self):
+		bar = self.menuBar()
+		file = bar.addMenu("File")
+		newAction = file.addAction("New")
+		saveAction = file.addAction("Save")
+		saveAsAction = file.addAction("Save As")
+		openAction = file.addAction("Open")
+		quitAction = file.addAction("Quit")
+		
+		# key shortcuts
+		newAction.setShortcut(QKeySequence(QKeySequence.New))
+		saveAction.setShortcut(QKeySequence(QKeySequence.Save))
+		saveAsAction.setShortcut(QKeySequence(QKeySequence.SaveAs))
+		openAction.setShortcut(QKeySequence(QKeySequence.Open))
+		quitAction.setShortcut(QKeySequence(QKeySequence.Quit))
+		
+		# actual function calls
+		newAction.triggered.connect(self.MenuAction_New)
+		saveAction.triggered.connect(self.MenuAction_Save)
+		saveAsAction.triggered.connect(self.MenuAction_SaveAs)
+		openAction.triggered.connect(self.MenuAction_Open)
+		quitAction.triggered.connect(self.MenuAction_Quit)
+		
+		
+	def MenuAction_New(self, checked):
+		new_stack = OperationStack()
+		self.use_stack(new_stack)
+		self.set_current_filepath(None)
+		self.setStackDirty(False)
+	
+	
+	def MenuAction_Save(self, checked):
+		# if this is a new (unnamed) file, we need a filepath
+		if self.currentFilepath is None:
+			self.set_current_filepath(self.ask_for_filepath(open = False))
+		
+		# if the filepath still isn't set, do nothing
+		if self.currentFilepath is None:
+			return False
+			
+		# save file
+		success = self.save_stack_to_file(self.currentFilepath)
+		
+		if success:
+			self.setStackDirty(False)
+		
+		return success
+		
+		
+	def MenuAction_SaveAs(self, checked):
+		# create file dialog
+		filepath = self.ask_for_filepath(open = False)
+		
+		# if the filepath wasn't set, do nothing
+		if filepath is None:
+			return
+		
+		# save file
+		success = self.save_stack_to_file(filepath)
+		
+		if success:
+			# update working filepath
+			self.set_current_filepath(filepath)
+			self.setStackDirty(False)
+		
+		
+	def MenuAction_Open(self, checked):
+		if self.stackDirty:
+			success = self.askToSave("opening")
+			if not success:
+				return
+	
+		# create file dialog
+		filepath = self.ask_for_filepath()
+		
+		# if the filepath wasn't set, do nothing
+		if filepath is None or filepath == "":
+			return
+		
+		new_stack = self.open_stack_file(filepath)
+		
+		if new_stack is not None:
+			self.use_stack(new_stack)
+			self.set_current_filepath(filepath)
+			self.setStackDirty(False)
+		
+	def askToSave(self, actionstr="exiting"):
+		# ask if the user wants to save
+		box = QMessageBox()
+		box.setWindowTitle("Unsaved Changes")
+		box.setText("Do you want to save before {0}?".format(actionstr))
+		box.setStandardButtons(QMessageBox.Yes)
+		box.addButton(QMessageBox.No)
+		box.addButton(QMessageBox.Cancel)
+		box.setDefaultButton(QMessageBox.Yes)
+		result = box.exec_()
+		if(result == QMessageBox.Yes):
+			success = self.MenuAction_Save(None)
+			if not success:
+				# don't exit if we didn't save
+				return False
+		elif(result == QMessageBox.Cancel):
+			# don't exit
+			return False
+			
+		return True
+		
+	def MenuAction_Quit(self, checked):
+		#check for unsaved changes
+		if self.stackDirty:
+			success = self.askToSave()
+			if not success:
+				return
+		
+		if self.qtApp:
+			self.qtApp.quit()
+
+		
+	def ask_for_filepath(self, open = True):
+		filePath = None
+		
+		file_dialog = QFileDialog(self)
+		#file_dialog.setLabelText("Open file")
+		file_dialog.setNameFilter("OpStack (*.ops)")
+			
+		if open:
+			file_dialog.setAcceptMode(QFileDialog.AcceptOpen)
+			file_dialog.setFileMode(QFileDialog.ExistingFile)
+		else:
+			file_dialog.setAcceptMode(QFileDialog.AcceptSave)
+			file_dialog.setFileMode(QFileDialog.AnyFile)
+		
+		accepted = file_dialog.exec_()
+		if accepted:
+			file = file_dialog.selectedFiles()[0]
+			filePath = os.path.join(file_dialog.directory().absolutePath(), file)
+		else:
+			return None
+			
+		print("QFileDialog returned: {0}".format(filePath))
+		return filePath
+		
+	def save_stack_to_file(self, filepath):
+		data = self.loadedStack.serialize()
+		
+		print("Attempting to serialize this data to a file: {0}".format(data))
+		
+		try:
+			with open(filepath, 'w') as outfile:
+				json.dump(data, outfile)
+				return True
+		except EnvironmentError as error:
+			print("ERROR while opening file to write: {0}".format(error))
+			# show error to user
+			self.showError('Error while saving!','(see log for details)')
+			return False
+			
+
+	def open_stack_file(self, filepath):
+		try:
+			with open(filepath, 'r') as infile:
+				data = None
+				
+				try:
+					data = json.load(infile)
+				except json.decoder.JSONDecodeError as error:
+					print("ERROR while parsing JSON: {0}".format(error))
+					# show error to user
+					self.showError('Error while loading!','(see log for details)')
+					return None
+				
+				stack = OperationStack()
+				stack.deserialize(data)
+				return stack
+					
+		except EnvironmentError as error:
+			print("ERROR while opening file to read: {0}".format(error))
+			# show error to user
+			self.showError('Error while loading!','(see log for details)')
+			return None
+
+
+# ================= APPLICATION ENTRY POINT ==================
 
 if __name__=="__main__":
 	print("--- StackEditor ---")
@@ -610,8 +800,22 @@ if __name__=="__main__":
 		print("Opening starter image: {0}".format(args.starting_image.name))
 		img = cv2.imread(str(args.starting_image.name),cv2.IMREAD_COLOR)
 	
-	# start the program
-	start_stack_editor(img, stack)
 	
+	# --------------
+	# start the program
+	app = QApplication([])
+	
+	editor = StackEditor(None, app)
+	editor.show()
+	
+	# load the initial image and opstack
+	editor.use_image(img)
+	editor.use_stack(stack)
+	
+	app.exec_()	
+	# --------------
+
 	print("=================")
 	print("Execution complete.")
+
+#EOF

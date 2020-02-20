@@ -12,13 +12,28 @@ except ImportError:
 from enum import Enum
 import re
 
+from rrUtilities.TypeHelpers import is_int
 
-def is_int(s):
-    try:
-        int(s)
-        return True
-    except ValueError:
-        return False
+
+#TODO clean up parameters so there isn't so much copy-pasting of getters/setters
+
+# dict is filled out at bottom of file after all the definitions
+OPERATION_TYPES = {}
+# used for potentially versioning save files in the future
+VERSION = "0.0.1"
+
+def deserialize_op_type(type_str):
+	if type_str in OPERATION_TYPES:
+		return OPERATION_TYPES[type_str]
+	return None
+	
+def serialize_op_type(type_obj):
+	for key, value in OPERATION_TYPES.items():
+		if value == type_obj:
+			return key
+	print("WARNING: StackOperation type was not able to be serialized ({0})... consider updating the operation_types dict in ImageOperations.py".format(type_obj))
+	print(" --> Current Op type dict: {0}".format(OPERATION_TYPES))
+	return str(type_obj)
 
 class ParameterType(Enum):
 	SLIDER = 0
@@ -28,9 +43,8 @@ class ParameterType(Enum):
 	DROPDOWN = 4
 	NONE = 5
 	
-
-#TODO clean up parameters so there isn't so much copy-pasting of getters/setters
-	
+# Represents a parameter of any type - 
+# 	used to reflect Op class properties into UI in the stack editor
 class OperationParameter:
 	def __init__(self, label, getter, setter):
 		self.type = ParameterType.NONE
@@ -65,8 +79,18 @@ class OperationParameter:
 		self.tickInterval = interval
 		return self
 		
-
+	def serialize(self):
+		return [self.label, self.getter()]
+		
+	def deserialize(self, data):
+		self.setter(data[1])
+		
+# ImageOperations are CV (computer vision) steps in the OperationStack
 class ImageOperation:
+	KEY_PROPS = "props"
+	KEY_MUTED = "muted"
+	KEY_LABEL = "label"
+
 	def __init__(self):
 		self.label = self.get_default_label()
 		self.muted = False
@@ -92,6 +116,149 @@ class ImageOperation:
 	def get_parameters(self):
 		return self.parameters
 
+	def serialize(self):
+		props = {}
+		
+		for param in self.parameters:
+			entry = param.serialize()
+			props[entry[0]] = entry[1]
+		
+		return {
+			self.KEY_PROPS: props,
+			self.KEY_MUTED: self.muted,
+			self.KEY_LABEL: self.label
+			}
+	
+	def deserialize(self, data):
+		self.set_label(data[self.KEY_LABEL])
+		self.muted = data[self.KEY_MUTED]
+		for prop_key, prop_val in data[self.KEY_PROPS].items():
+			for param in self.parameters:
+				param_key = param.serialize()[0]
+				if param_key == prop_key:
+					param.deserialize([prop_key, prop_val])
+					break
+			else:
+				print("WARNING: no matching parameter found when deserializing property: ({0} -> {1})".format(prop_key, prop_val))
+
+# This is the real work-horse: the OperationStack object gets passed around to be used/modified
+class OperationStack:
+	KEY_VERSION = "version"
+	KEY_OPS = "ops"
+	KEY_TYPE = "type"
+	KEY_DATA = "data"
+
+	def __init__(self):
+		self.op_stack = []
+
+	def add_operation(self, new_op, label = None):
+		if not label:
+			label = new_op.get_label()
+			for index, op in reversed(list(enumerate(self.op_stack))):
+				results = re.match(r'([A-Za-z\-\_ ]+)([0-9]*)', op.get_label()).groups()
+				if results[0] == label:
+					num = 0
+					if results[1] and results[1].isdigit():
+						num = int(results[1])
+					label += str(num + 1)
+					break
+					
+		new_op.set_label(label)
+		self.op_stack.append(new_op)
+	
+	def get_op(self, index):
+		if index < 0 or index >= len(self.op_stack):
+			return None
+		return self.op_stack[index]
+		
+	def get_label(self, index):
+		if index < 0 or index >= len(self.op_stack):
+			return None
+		return self.op_stack[index].get_label()
+
+	def get_stack(self):
+		return self.op_stack
+
+	def swap_ops(self, a, b):
+		if a < 0 or a >= len(self.op_stack):
+			print("WARNING: swap operation A index was out of bounds")
+			return
+		if b < 0 or b >= len(self.op_stack):
+			print("WARNING: swap operation B index was out of bounds")
+			return
+		self.op_stack[a], self.op_stack[b] = self.op_stack[b], self.op_stack[a]
+
+	def remove_op(self, index):
+		self.op_stack.pop(index)
+		
+	def serialize(self):
+		stack_props = []
+		
+		for index, op in list(enumerate(self.op_stack)):
+			stack_props.append({
+				self.KEY_DATA: op.serialize(),
+				self.KEY_TYPE: serialize_op_type(type(op)),
+				self.KEY_VERSION: version
+				})
+		
+		return {
+			self.KEY_VERSION: VERSION,
+			self.KEY_OPS: stack_props,
+		}
+		
+	def deserialize(self, data):
+		if data[self.KEY_VERSION] != VERSION:
+			print("WARNING: Version mismatch in serialized stack data {0} vs {1} (current)".format(data[self.KEY_VERSION], VERSION))
+	
+		for prop in data[self.KEY_OPS]:
+			op_type = deserialize_op_type(prop[self.KEY_TYPE])
+			if op_type is not None:
+				new_op = op_type()
+				new_op.deserialize(prop[self.KEY_DATA])
+				self.add_operation(new_op)
+			else:
+				print("WARNING: StackOperation type was not able to be deserialized: {0}".format(prop[self.KEY_TYPE]))
+
+
+# The ImageProcessor is a helper class that applies an OperationStack to a cv2 image
+class ImageProcesser:
+
+	def __init__(self, stack = None):
+		if stack:
+			self.op_stack = stack
+		else:
+			self.op_stack = OperationStack()
+		self.results = []
+	
+	def add_operation(self, operation, label = None):
+		self.op_stack.add_operation(operation, label)
+	
+	def process_color_image(self, img):
+		self.process_image(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+	
+	def process_image(self, img):
+		results = [[img, "Original"]]
+		temp = img
+		for op in self.op_stack.get_stack():
+			if not op.muted:
+				temp = op.apply_to_image(temp)
+			results.append([temp, op.get_label()])
+		self.results = results
+		return temp
+		
+	def get_last_results(self):
+		return self.results
+
+
+
+
+
+# ================== SPECIFIC OPERATIONS ===================
+
+#Note: the big hefty operations are: 
+# 	ThresholdOperation, BlurOperation, and especially MorphologicalOperation, 
+#	which does multiple things
+
 
 class NullOperation(ImageOperation):
 	def apply_to_image(self, img):
@@ -116,14 +283,9 @@ class BitwiseNotOperation(ImageOperation):
 	def get_default_label(self):
 		return "Bitwise Not"
 
-class ThresholdOperation(ImageOperation):
 
-	@staticmethod
-	def get_type_label():
-		return "Threshold Operation"
-		
-	def get_default_label(self):
-		return "Threshold"
+
+class ThresholdOperation(ImageOperation):
 
 	doc = """
 https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html?highlight=adaptivethreshold
@@ -149,6 +311,14 @@ value for the pixel: 3, 5, 7, and so on.
 Constant subtracted from the mean or weighted mean (see the details below). 
 Normally, it is positive but may be zero or negative as well.
 """
+
+	@staticmethod
+	def get_type_label():
+		return "Threshold Operation"
+		
+	def get_default_label(self):
+		return "Threshold"
+
 
 	def __init__(self):
 		super(ThresholdOperation, self).__init__()
@@ -306,14 +476,9 @@ Normally, it is positive but may be zero or negative as well.
 					self.maxValue,
 					self.thresholdType)[1]
 
-class BlurOperation(ImageOperation):
 
-	@staticmethod
-	def get_type_label():
-		return "Blur Operation"
-		
-	def get_default_label(self):
-		return "Blur"
+
+class BlurOperation(ImageOperation):
 
 	doc = """
 	https://docs.opencv.org/2.4/modules/imgproc/doc/filtering.html#void%20GaussianBlur(InputArray%20src,%20OutputArray%20dst,%20Size%20ksize,%20double%20sigmaX,%20double%20sigmaY,%20int%20borderType)
@@ -335,6 +500,14 @@ of all this semantics, it is recommended to specify all of ksize, sigmaX, and si
     borderType – 
 pixel extrapolation method (see borderInterpolate() for details).
 """
+
+	@staticmethod
+	def get_type_label():
+		return "Blur Operation"
+		
+	def get_default_label(self):
+		return "Blur"
+
 
 	def __init__(self, kernelSize = 5):
 		super(BlurOperation, self).__init__()
@@ -390,6 +563,7 @@ pixel extrapolation method (see borderInterpolate() for details).
 		return cv2.GaussianBlur(img,
 			(self.kernelSize, self.kernelSize),
 			self.sigma)
+
 
 
 class MorphologicalOperationType(Enum):
@@ -527,79 +701,13 @@ class MorphologicalOperation(ImageOperation):
 			print ("WARNING: MorphologicalOperation was applied with an inoperable type: {}".format(self.type))
 			return img
 
-class OperationStack:
-	def __init__(self):
-		self.op_stack = []
 
-	def add_operation(self, new_op, label = None):
-		if not label:
-			label = new_op.get_label()
-			for index, op in reversed(list(enumerate(self.op_stack))):
-				results = re.match(r'([A-Za-z\-\_ ]+)([0-9]*)', op.get_label()).groups()
-				if results[0] == label:
-					num = 0
-					if results[1] and results[1].isdigit():
-						num = int(results[1])
-					label += str(num + 1)
-					break
-					
-		new_op.set_label(label)
-		self.op_stack.append(new_op)
-	
-	def get_op(self, index):
-		if index < 0 or index >= len(self.op_stack):
-			return None
-		return self.op_stack[index]
-		
-	def get_label(self, index):
-		if index < 0 or index >= len(self.op_stack):
-			return None
-		return self.op_stack[index].get_label()
+OPERATION_TYPES = {
+	"NullOperation": NullOperation,
+	"BitwiseNotOperation": BitwiseNotOperation,
+	"ThresholdOperation": ThresholdOperation,
+	"BlurOperation": BlurOperation,
+	"MorphologicalOperation": MorphologicalOperation,
+}
 
-	def get_stack(self):
-		return self.op_stack
-
-	def swap_ops(self, a, b):
-		if a < 0 or a >= len(self.op_stack):
-			print("WARNING: swap operation A index was out of bounds")
-			return
-		if b < 0 or b >= len(self.op_stack):
-			print("WARNING: swap operation B index was out of bounds")
-			return
-		self.op_stack[a], self.op_stack[b] = self.op_stack[b], self.op_stack[a]
-
-	def remove_op(self, index):
-		self.op_stack.pop(index)
-		
-
-class ImageProcesser:
-
-	def __init__(self, stack = None):
-		if stack:
-			self.op_stack = stack
-		else:
-			self.op_stack = OperationStack()
-		self.results = []
-	
-	def add_operation(self, operation, label = None):
-		self.op_stack.add_operation(operation, label)
-	
-	def process_color_image(self, img):
-		self.process_image(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
-	
-	def process_image(self, img):
-		results = [[img, "Original"]]
-		temp = img
-		for op in self.op_stack.get_stack():
-			if not op.muted:
-				temp = op.apply_to_image(temp)
-			results.append([temp, op.get_label()])
-		self.results = results
-		return temp
-		
-	def get_last_results(self):
-		return self.results
-		
-
-		
 #EOF
