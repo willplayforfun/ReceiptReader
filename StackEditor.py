@@ -42,15 +42,15 @@ from queue import Queue
 # 	the Tesseract Preview, which shows a preview of how OCR will interpret the image
 		
 # TODO: 
-# 	show open filename in window bar
-# 	allow customizing of operation labels
+# 	[DONE] show open filename in window bar
+# 	[DONE] allow customizing of operation labels
 # 	[DONE] multi-thread tesseract
 # 	[DONE] grey out tesseract update button until the stack changes
 # 	toggle overlay of actual image in tesseract preview
 # 	allow slaving all the image viewing areas to the same scroll amount
 # 	fix scrolling out on image viewers 
 # 	[DONE] add a check box to auto-update tesseract preview
-# 	add stack saving / opening
+# 	[DONE] add stack saving / opening
 # 	add boundaries and warping operations
 # 	add undo/redo stack
 # 	fix behavior of threshold panel, disabled fields don't update properly
@@ -204,15 +204,22 @@ class OperationEditorWidget(QDockWidget):
 			parent.onOperationSelected.connect(self.onOperationSelected)
 		
 	def onOperationSelected(self, index):
-		self.setup(self.StackEditorApplication.loadedStack.get_op(index).get_parameters())
+		self.current_op = self.StackEditorApplication.loadedStack.get_op(index)
+		self.setup(self.current_op.get_parameters(), self.current_op.get_label())
 		
 	def clear_widgets(self):
 		# remove all widgets
 		clearLayout(self.layout)
 		self.rows = []
 		
-	def add_common(self):
-		pass
+	def onTitleEditingFinished(self):
+		self.title_edit.clearFocus()
+		self.current_op.set_label(self.title_edit.text())
+		
+	def add_common(self, label):
+		self.title_edit = QLineEdit(label)
+		self.title_edit.editingFinished.connect(self.onTitleEditingFinished)
+		self.layout.addWidget(self.title_edit)
 		
 	def add_parameter(self, param):
 		row = QWidget(self.container)
@@ -290,9 +297,9 @@ class OperationEditorWidget(QDockWidget):
 	def onValueSoftChanged(self):
 		self.onPropertySoftChanged.emit()
 		
-	def setup(self, params):
+	def setup(self, params, label):
 		self.clear_widgets()
-		self.add_common()
+		self.add_common(label)
 		
 		for param in params:
 			self.add_parameter(param)
@@ -345,7 +352,9 @@ class StackEditor(QMainWindow):
 		self.setWindowTitle("CV Operation Stack Editor - {0}".format(message))
 	
 	def closeEvent(self, event):
-		success = self.askToSave()
+		success = True
+		if self.stackDirty:
+			success = self.askToSave()
 		if success:
 			event.accept()
 		else:

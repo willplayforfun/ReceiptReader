@@ -194,7 +194,10 @@ class StackModifierWidget(QDockWidget):
 		clearLayout(self.layout)
 		self.rows = []
 		
+		self.latest_stack = stack
+		
 		for op in stack.get_stack():
+			op.onLabelUpdatedCallbacks.append(self.handleLabelUpdated)
 			self.add_row(op.get_label(), op.muted)
 		
 		add_button = QPushButton("+")
@@ -203,6 +206,9 @@ class StackModifierWidget(QDockWidget):
 			
 		self.layout.addWidget(add_button)
 		self.layout.addStretch()
+		
+	def handleLabelUpdated(self):
+		self.update_names(self.latest_stack)
 		
 	def update_names(self, stack):
 		# stack is of type OperationStack

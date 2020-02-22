@@ -87,6 +87,10 @@ class OperationParameter:
 		
 # ImageOperations are CV (computer vision) steps in the OperationStack
 class ImageOperation:
+
+	# we aren't usnig Qt Signals because we want to decouple the image processing stack from Qt
+	onLabelUpdatedCallbacks = []
+
 	KEY_PROPS = "props"
 	KEY_MUTED = "muted"
 	KEY_LABEL = "label"
@@ -112,6 +116,8 @@ class ImageOperation:
 		
 	def set_label(self, new_label):
 		self.label = new_label
+		for callback in self.onLabelUpdatedCallbacks:
+			callback()
 	
 	def get_parameters(self):
 		return self.parameters
