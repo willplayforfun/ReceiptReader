@@ -204,7 +204,7 @@ class OperationStack:
 			stack_props.append({
 				self.KEY_DATA: op.serialize(),
 				self.KEY_TYPE: serialize_op_type(type(op)),
-				self.KEY_VERSION: version
+				self.KEY_VERSION: VERSION
 				})
 		
 		return {
